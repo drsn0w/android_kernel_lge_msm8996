@@ -1,8 +1,8 @@
 VERSION = 3
 PATCHLEVEL = 18
-SUBLEVEL = 20
+SUBLEVEL = 40
 EXTRAVERSION =
-NAME = Shuffling Zombie Juror
+NAME =
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

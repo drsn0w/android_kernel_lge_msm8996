@@ -25,7 +25,7 @@
 
 #include <linux/input/lge_touch_core.h>
 #include <linux/input/touch_synaptics.h>
-//#include <soc/qcom/lge/board_lge.h>
+#include <soc/qcom/lge/board_lge.h>
 
 #define PAGES_TO_SERVICE	(10)
 #define PDT_START			(0x00E9)
@@ -114,7 +114,7 @@ static int prox_i2c_read(struct synaptics_ts_data *ts,
 	bool page_changed;
 
 	/* page read */
-	retval = touch_ts_i2c_read(ts->client, PAGE_SELECT_REG,
+	retval = touch_i2c_read(ts->client, PAGE_SELECT_REG,
 			sizeof(page_old), &page_old);
 
 	if (retval < 0) {
@@ -141,7 +141,7 @@ static int prox_i2c_read(struct synaptics_ts_data *ts,
 	}
 
 	/* read register */
-	retval = touch_ts_i2c_read(ts->client, (u8)(addr & ~(MASK_8BIT << 8)),
+	retval = touch_i2c_read(ts->client, (u8)(addr & ~(MASK_8BIT << 8)),
 			length, data);
 
 	if (retval < 0) {
@@ -175,7 +175,7 @@ static int prox_i2c_write(struct synaptics_ts_data *ts,
 	bool page_changed;
 
 	/* page read */
-	retval = touch_ts_i2c_read(ts->client, PAGE_SELECT_REG,
+	retval = touch_i2c_read(ts->client, PAGE_SELECT_REG,
 			sizeof(page_old), &page_old);
 
 	if (retval < 0) {
@@ -202,7 +202,7 @@ static int prox_i2c_write(struct synaptics_ts_data *ts,
 	}
 
 	/* write register */
-	retval = touch_ts_i2c_write(ts->client, (u8)(addr & ~(MASK_8BIT << 8)),
+	retval = touch_i2c_write(ts->client, (u8)(addr & ~(MASK_8BIT << 8)),
 			length, data);
 
 	if (retval < 0) {
@@ -765,9 +765,8 @@ static struct synaptics_ts_exp_fn proximity_module = {
 static int touch_proximity_module_init(void)
 {
 	TOUCH_PROX_MSG("\n");
-	/* h1 hdk use panel type 2*/
-	//if (lge_get_panel() == 3)
-	//	return 0;
+	if (lge_get_panel() == 3)
+		return 0;
 
 	synaptics_ts_prox_function(&proximity_module, true);
 

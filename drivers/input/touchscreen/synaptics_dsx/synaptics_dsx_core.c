@@ -5,7 +5,7 @@
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
- * Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -90,6 +90,9 @@
 
 #define SYNA_F11_MAX		4096
 #define SYNA_F12_MAX		65536
+
+#define SYNA_S332U_PACKAGE_ID		332
+#define SYNA_S332U_PACKAGE_ID_REV		85
 
 static int synaptics_rmi4_f12_set_enables(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short ctrl28);
@@ -496,6 +499,7 @@ static irqreturn_t synaptics_filter_interrupt(
 {
 	if (atomic_read(&rmi4_data->st_enabled)) {
 		if (atomic_cmpxchg(&rmi4_data->st_pending_irqs, 0, 1) == 0) {
+			reinit_completion(&rmi4_data->st_irq_processed);
 			synaptics_secure_touch_notify(rmi4_data);
 			wait_for_completion_interruptible(
 				&rmi4_data->st_irq_processed);
@@ -603,9 +607,8 @@ static ssize_t synaptics_secure_touch_enable_store(struct device *dev,
 			err = -EIO;
 			break;
 		}
-
-		INIT_COMPLETION(rmi4_data->st_powerdown);
-		INIT_COMPLETION(rmi4_data->st_irq_processed);
+		reinit_completion(&rmi4_data->st_powerdown);
+		reinit_completion(&rmi4_data->st_irq_processed);
 		atomic_set(&rmi4_data->st_enabled, 1);
 		atomic_set(&rmi4_data->st_pending_irqs,  0);
 		break;
@@ -1037,21 +1040,25 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 
 		/* Start checking from the highest bit */
 		temp = extra_data->data15_size - 1; /* Highest byte */
-		finger = (fingers_to_process - 1) % 8; /* Highest bit */
-		do {
-			if (extra_data->data15_data[temp] & (1 << finger))
-				break;
+		if ((temp >= 0) && (fingers_to_process > 0) &&
+		    (temp < ((F12_FINGERS_TO_SUPPORT + 7) / 8))) {
+			finger = (fingers_to_process - 1) % 8; /* Highest bit */
+			do {
+				if (extra_data->data15_data[temp]
+					& (1 << finger))
+					break;
 
-			if (finger) {
-				finger--;
-			} else {
-				temp--; /* Move to the next lower byte */
-				finger = 7;
-			}
+				if (finger) {
+					finger--;
+				} else {
+					/* Move to the next lower byte */
+					temp--;
+					finger = 7;
+				}
 
-			fingers_to_process--;
-		} while (fingers_to_process);
-
+				fingers_to_process--;
+			} while (fingers_to_process && (temp >= 0));
+		}
 		dev_dbg(rmi4_data->pdev->dev.parent,
 			"%s: Number of fingers to process = %d\n",
 			__func__, fingers_to_process);
@@ -2232,6 +2239,32 @@ static int synaptics_rmi4_alloc_fh(struct synaptics_rmi4_fn **fhandler,
 	return 0;
 }
 
+static int synaptics_rmi4_read_configid(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char ctrl_base_addr)
+{
+	unsigned int device_config_id;
+
+	/*
+	 * We may get an error while trying to read config id if it is
+	 *  not provisioned by vendor
+	 */
+	if (synaptics_rmi4_reg_read(rmi4_data, ctrl_base_addr,
+			(unsigned char *)(&device_config_id),
+			 sizeof(device_config_id)) < 0)
+		dev_err(rmi4_data->pdev->dev.parent, "Failed to read device config ID from CTP\n");
+
+	if (rmi4_data->hw_if->board_data->config_id)
+		dev_info(rmi4_data->pdev->dev.parent,
+			"CTP Config ID=%pI4\tDT Config ID=%pI4\n",
+			&device_config_id,
+			&rmi4_data->hw_if->board_data->config_id);
+	else
+		dev_info(rmi4_data->pdev->dev.parent,
+			"CTP Config ID=%pI4\n", &device_config_id);
+
+	return 0;
+}
+
  /**
  * synaptics_rmi4_query_device()
  *
@@ -2260,7 +2293,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 	struct synaptics_rmi4_fn *fhandler;
 	struct synaptics_rmi4_device_info *rmi;
 	unsigned char pkg_id[PACKAGE_ID_SIZE];
-
 	rmi = &(rmi4_data->rmi4_mod_info);
 
 rescan_pdt:
@@ -2299,6 +2331,15 @@ rescan_pdt:
 					page_number);
 
 			switch (rmi_fd.fn_number) {
+			case SYNAPTICS_RMI4_F34:
+				/*
+				 * Though function F34 is an interrupt source,
+				 * but it is not a data source, hence do not
+				 * add its handler to support_fn_list
+				 */
+				synaptics_rmi4_read_configid(rmi4_data,
+						 rmi_fd.ctrl_base_addr);
+				break;
 			case SYNAPTICS_RMI4_F01:
 				if (rmi_fd.intr_src_count == 0)
 					break;
@@ -2730,7 +2771,9 @@ static int synaptics_rmi4_parse_dt_children(struct device *dev,
 				 */
 				continue;
 			} else if (of_property_read_bool(child,
-				"synaptics,bypass-sensor-coords-check")) {
+				"synaptics,bypass-sensor-coords-check") &&
+				of_find_property(child,
+					"synaptics,panel-coords", NULL)) {
 				/*
 				 * Some unprogrammed panels from touch vendor
 				 * and wrongly programmed panels from factory
@@ -2741,6 +2784,9 @@ static int synaptics_rmi4_parse_dt_children(struct device *dev,
 				 * of coordinate range read from sensor and read
 				 * from DT and continue normal operation.
 				 */
+				synaptics_dsx_get_dt_coords(dev,
+						"synaptics,panel-coords",
+						rmi4_pdata, child);
 				dev_info(dev,
 					"%s Synaptics package id matches %d %d,"
 					"but bypassing the comparison of sensor"
@@ -2778,6 +2824,10 @@ static int synaptics_rmi4_parse_dt_children(struct device *dev,
 						(rmi4_pdata->panel_maxy !=
 						rmi4_data->sensor_max_y))
 						continue;
+				} else {
+					dev_info(dev, "Smax_x Smax_y = %d:%d\n",
+						rmi4_data->sensor_max_x,
+						rmi4_data->sensor_max_y);
 				}
 			}
 		}
@@ -3657,9 +3707,10 @@ err_create_debugfs_file:
 	debugfs_remove_recursive(rmi4_data->dir);
 err_create_debugfs_dir:
 	cancel_delayed_work_sync(&exp_data.work);
-	flush_workqueue(exp_data.workqueue);
-	destroy_workqueue(exp_data.workqueue);
-
+	if (exp_data.workqueue != NULL) {
+		flush_workqueue(exp_data.workqueue);
+		destroy_workqueue(exp_data.workqueue);
+	}
 	synaptics_rmi4_irq_enable(rmi4_data, false);
 	free_irq(rmi4_data->irq, rmi4_data);
 
@@ -4140,8 +4191,15 @@ static int synaptics_rmi4_resume(struct device *dev)
 	int retval;
 	struct synaptics_rmi4_exp_fhandler *exp_fhandler;
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+	struct synaptics_rmi4_device_info *rmi;
 	const struct synaptics_dsx_board_data *bdata =
 			rmi4_data->hw_if->board_data;
+
+	rmi = &(rmi4_data->rmi4_mod_info);
+	if (rmi->package_id == SYNA_S332U_PACKAGE_ID &&
+			rmi->package_id_rev == SYNA_S332U_PACKAGE_ID_REV) {
+		synaptics_rmi4_reset_device(rmi4_data);
+	}
 
 	if (rmi4_data->staying_awake)
 		return 0;

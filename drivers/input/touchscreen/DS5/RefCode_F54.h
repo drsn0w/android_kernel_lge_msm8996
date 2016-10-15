@@ -69,3 +69,8 @@ enum {
 	RSP_CAL_TEST,
 	RSP_LPWG_RAW_DATA,
 };
+
+static inline void usleep(unsigned long usecs)
+{
+	usleep_range(usecs, usecs);
+}

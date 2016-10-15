@@ -187,13 +187,13 @@ error:
 static int writeRMI(struct i2c_client *client,
 		u8 uRmiAddress, u8 *data, unsigned int length)
 {
-	return touch_i2c_write(client, uRmiAddress, length, data);
+	return touch_ts_i2c_write(client, uRmiAddress, length, data);
 }
 
 static int readRMI(struct i2c_client *client,
 		u8 uRmiAddress, u8 *data, unsigned int length)
 {
-	return touch_i2c_read(client, uRmiAddress, length, data);
+	return touch_ts_i2c_read(client, uRmiAddress, length, data);
 }
 
 /* no ds4 */
